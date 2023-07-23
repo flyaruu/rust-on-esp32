@@ -33,6 +33,8 @@ esp-idf-sys = { version = "0.33", default-features = false }
 esp-idf-hal = { version = "0.41", optional = true, default-features = false }
 esp-idf-svc = { version = "0.46", optional = true, default-features = false }
 embedded-svc = { version = "0.25", optional = true, default-features = false }
+anyhow = "1.0.72"
+futures = "0.3.28"
 
 [build-dependencies]
 embuild = "0.31.2"
