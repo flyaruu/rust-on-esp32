@@ -56,6 +56,20 @@ fn main() {
     let green_channel = Arc::new(Mutex::new(LedcDriver::new(peripherals.ledc.channel1, &led_timer_driver, peripherals.pins.gpio4).unwrap()));
     let blue_channel = Arc::new(Mutex::new(LedcDriver::new(peripherals.ledc.channel2, &led_timer_driver, peripherals.pins.gpio5).unwrap()));
 
+    let servo_timer = peripherals.ledc.timer1;
+    let servo_driver = LedcTimerDriver::new(servo_timer, &TimerConfig::new().frequency(50.Hz()).resolution(esp_idf_hal::ledc::Resolution::Bits14)).unwrap();
+    let servo = Arc::new(Mutex::new(LedcDriver::new(peripherals.ledc.channel3, servo_driver, peripherals.pins.gpio2).unwrap()));
+
+    // 2^14 - 1 
+
+    let max_duty = servo.lock().unwrap().get_max_duty();
+
+    let min = max_duty / 40;
+    let max = max_duty / 8;
+
+    fn interpolate(angle: u32, min: u32, max: u32)->u32 {
+        angle * (max - min) / 180 + min
+    }
 
     server.fn_handler("/color", Post, move |mut req| {
         let mut buffer = [0_u8; 6];
@@ -69,6 +83,16 @@ fn main() {
         red_channel.lock().unwrap().set_duty(color.r as u32).unwrap();
         green_channel.lock().unwrap().set_duty(color.g as u32).unwrap();
         blue_channel.lock().unwrap().set_duty(color.b as u32).unwrap();
+        Ok(())
+    }).unwrap().fn_handler("/servo", Post, move |mut req| {
+        let mut buffer = [0_u8; 6];
+        let bytes_read = req.read(&mut buffer).unwrap();
+        let angle_string = from_utf8(&buffer[0..bytes_read]).unwrap();
+        let angle: u32 = angle_string.parse().unwrap();
+        // 50hz = 1000 / 50 = 20ms
+        // 0.5 ms => 0
+        // 2.5 ms => 180
+        servo.lock().unwrap().set_duty(interpolate(angle,min,max)).unwrap();
         Ok(())
     }).unwrap();
 
