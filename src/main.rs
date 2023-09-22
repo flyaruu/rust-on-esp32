@@ -1,13 +1,13 @@
 use std::{thread::sleep, time::Duration, sync::{Mutex, Arc}, str::from_utf8};
 
-use embedded_svc::{wifi::{Configuration, ClientConfiguration, AuthMethod}, http::Method::Post, io::Read};
+use embedded_svc::{wifi::{Configuration, ClientConfiguration, AuthMethod}, http::Method::Post,http::Method::Get, io::Read};
 use esp_idf_hal::{peripheral::Peripheral, prelude::Peripherals, gpio::PinDriver, ledc::{LedcTimerDriver, config::TimerConfig, LedcDriver}};
 use esp_idf_svc::{eventloop::EspSystemEventLoop, nvs::{EspNvsPartition, NvsDefault, EspDefaultNvsPartition}, timer::{EspTimerService, Task, EspTaskTimerService}, wifi::{AsyncWifi, EspWifi}, ping::EspPing, http::server::EspHttpServer};
 use esp_idf_sys as _; // If using the `binstart` feature of `esp-idf-sys`, always keep this module imported
 use log::*;
 use esp_idf_hal::units::*;
 
-
+mod stepper;
 
 const SSID: &str = env!("RUST_ESP32_STD_DEMO_WIFI_SSID");
 const PASS: &str = env!("RUST_ESP32_STD_DEMO_WIFI_PASS");
@@ -49,17 +49,11 @@ fn main() {
 
     let mut server = EspHttpServer::new(&Default::default()).unwrap();
 
-    let led_timer = peripherals.ledc.timer0;
-    let led_timer_driver = LedcTimerDriver::new(led_timer, &TimerConfig::new().frequency(1000.Hz())).unwrap();
-
-    let red_channel = Arc::new(Mutex::new(LedcDriver::new(peripherals.ledc.channel0, &led_timer_driver, peripherals.pins.gpio3).unwrap()));
-    let green_channel = Arc::new(Mutex::new(LedcDriver::new(peripherals.ledc.channel1, &led_timer_driver, peripherals.pins.gpio4).unwrap()));
-    let blue_channel = Arc::new(Mutex::new(LedcDriver::new(peripherals.ledc.channel2, &led_timer_driver, peripherals.pins.gpio5).unwrap()));
-
     let servo_timer = peripherals.ledc.timer1;
     let servo_driver = LedcTimerDriver::new(servo_timer, &TimerConfig::new().frequency(50.Hz()).resolution(esp_idf_hal::ledc::Resolution::Bits14)).unwrap();
     let servo = Arc::new(Mutex::new(LedcDriver::new(peripherals.ledc.channel3, servo_driver, peripherals.pins.gpio2).unwrap()));
 
+    let mut stepper = Arc::new(Mutex::new(stepper::Stepper::new(peripherals.pins.gpio3, peripherals.pins.gpio4, peripherals.pins.gpio5, peripherals.pins.gpio6)));
     // 2^14 - 1 
 
     let max_duty = servo.lock().unwrap().get_max_duty();
@@ -71,20 +65,7 @@ fn main() {
         angle * (max - min) / 180 + min
     }
 
-    server.fn_handler("/color", Post, move |mut req| {
-        let mut buffer = [0_u8; 6];
-        req.read_exact(&mut buffer)?;
-        let color: Color = from_utf8(&buffer)?.try_into()?;
-
-        println!("Color: {:?}",color);
-
-        let mut response = req.into_ok_response()?;
-        response.write("Hello from Esp32-c3".as_bytes())?;
-        red_channel.lock().unwrap().set_duty(color.r as u32).unwrap();
-        green_channel.lock().unwrap().set_duty(color.g as u32).unwrap();
-        blue_channel.lock().unwrap().set_duty(color.b as u32).unwrap();
-        Ok(())
-    }).unwrap().fn_handler("/servo", Post, move |mut req| {
+    server.fn_handler("/servo", Post, move |mut req| {
         let mut buffer = [0_u8; 6];
         let bytes_read = req.read(&mut buffer).unwrap();
         let angle_string = from_utf8(&buffer[0..bytes_read]).unwrap();
@@ -93,6 +74,14 @@ fn main() {
         // 0.5 ms => 0
         // 2.5 ms => 180
         servo.lock().unwrap().set_duty(interpolate(angle,min,max)).unwrap();
+        Ok(())
+    }).unwrap().fn_handler("/stepper", Get, move |mut _req| {
+        let mut s = stepper.lock().unwrap();
+        for i in 0..1000 {
+            s.step(i);
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        s.stop();
         Ok(())
     }).unwrap();
 
