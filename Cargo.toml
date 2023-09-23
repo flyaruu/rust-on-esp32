@@ -35,6 +35,7 @@ esp-idf-svc = { version = "0.46.1", optional = true, default-features = false }
 embedded-svc = { version = "0.25", optional = true, default-features = false }
 anyhow = "1.0.72"
 futures = "0.3.28"
+accel-stepper = { version = "0.1.0", features = ["std"] }
 
 [build-dependencies]
 embuild = "0.31.2"

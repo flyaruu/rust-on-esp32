@@ -1,5 +1,6 @@
-use std::{thread::sleep, time::Duration, sync::{Mutex, Arc}, str::from_utf8};
+use std::{thread::sleep, time::Duration, sync::{Mutex, Arc}, str::from_utf8, collections::HashMap};
 
+use accel_stepper::{Driver, OperatingSystemClock};
 use embedded_svc::{wifi::{Configuration, ClientConfiguration, AuthMethod}, http::Method::Post,http::Method::Get, io::Read};
 use esp_idf_hal::{peripheral::Peripheral, prelude::Peripherals, gpio::PinDriver, ledc::{LedcTimerDriver, config::TimerConfig, LedcDriver}};
 use esp_idf_svc::{eventloop::EspSystemEventLoop, nvs::{EspNvsPartition, NvsDefault, EspDefaultNvsPartition}, timer::{EspTimerService, Task, EspTaskTimerService}, wifi::{AsyncWifi, EspWifi}, ping::EspPing, http::server::EspHttpServer};
@@ -53,7 +54,15 @@ fn main() {
     let servo_driver = LedcTimerDriver::new(servo_timer, &TimerConfig::new().frequency(50.Hz()).resolution(esp_idf_hal::ledc::Resolution::Bits14)).unwrap();
     let servo = Arc::new(Mutex::new(LedcDriver::new(peripherals.ledc.channel3, servo_driver, peripherals.pins.gpio2).unwrap()));
 
-    let mut stepper = Arc::new(Mutex::new(stepper::Stepper::new(peripherals.pins.gpio3, peripherals.pins.gpio4, peripherals.pins.gpio5, peripherals.pins.gpio6)));
+    let mut driver = Driver::default();
+    driver.set_max_speed(500.0);
+    driver.set_acceleration(200.0);
+
+    let driver = Arc::new(Mutex::new(driver));
+    let endpoint_driver = driver.clone();
+    let clock = OperatingSystemClock::new();
+
+    let mut stepper = stepper::Stepper::new(peripherals.pins.gpio3, peripherals.pins.gpio4, peripherals.pins.gpio5, peripherals.pins.gpio6);
     // 2^14 - 1 
 
     let max_duty = servo.lock().unwrap().get_max_duty();
@@ -75,18 +84,18 @@ fn main() {
         // 2.5 ms => 180
         servo.lock().unwrap().set_duty(interpolate(angle,min,max)).unwrap();
         Ok(())
-    }).unwrap().fn_handler("/stepper", Get, move |mut _req| {
-        let mut s = stepper.lock().unwrap();
-        for i in 0..1000 {
-            s.step(i);
-            std::thread::sleep(Duration::from_millis(2));
-        }
-        s.stop();
+    }).unwrap().fn_handler("/stepper", Get, move |mut req| {
+        let uri = req.uri();
+        let parts = uri.split_once('?').map(|(_,query_params)|query_params).unwrap_or("");
+        let params: HashMap<&str,&str> = parts.split('&').filter_map(|param| param.split_once('=')).collect();
+        let movement_command: i64 = params.get("command").unwrap_or(&"").parse().unwrap_or(0);
+        endpoint_driver.lock().unwrap().move_by(movement_command);
         Ok(())
     }).unwrap();
 
     loop {
-        sleep(Duration::from_secs(1));
+        driver.lock().unwrap().poll(&mut stepper, &clock).unwrap();
+        sleep(Duration::from_micros(2000));
     }
 }
 
